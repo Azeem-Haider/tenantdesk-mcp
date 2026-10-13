@@ -1,0 +1,28 @@
+{
+  "name": "tenantdesk-mcp",
+  "version": "0.2.0",
+  "description": "A tenant-safe MCP server for a multi-tenant SaaS: Claude can read and act on data, but only inside the signed-in user's tenant and role.",
+  "scripts": {
+    "stdio": "tsx src/stdio.ts",
+    "http": "tsx src/http.ts",
+    "token": "tsx scripts/issue-token.ts",
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.9",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "jose": "^5.10.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  }
+}
