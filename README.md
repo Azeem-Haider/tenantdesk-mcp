@@ -1,3 +1,5 @@
+> **⚠️ This is TenantDesk v0.1, deliberately vulnerable.** It is the version assessed in the sample security report. Do not deploy it. The fixed version is on `main` (v0.2.0).
+
 # TenantDesk MCP
 
 A tenant-safe [MCP](https://modelcontextprotocol.io) server for a multi-tenant SaaS.

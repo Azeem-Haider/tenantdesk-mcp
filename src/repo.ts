@@ -28,12 +28,12 @@ export class TenantScope {
     }
   }
 
-  async listCustomers(query: string | undefined, limit: number) {
+  async listCustomers(query: string | undefined, limit: number, tenantId?: string) {
     const r = await this.db.query(
       `select id, name, email, plan from customers
         where tenant_id = $1 and ($2::text is null or name ilike '%' || $2 || '%' or email ilike '%' || $2 || '%')
         order by name limit $3`,
-      [this.tenant, query ?? null, limit],
+      [tenantId ?? this.tenant, query ?? null, limit],
     );
     return r.rows;
   }
@@ -69,8 +69,8 @@ export class TenantScope {
 
   async getInvoice(invoiceId: string) {
     const r = await this.db.query(
-      "select id, customer_id, amount_cents, refunded_cents, status, issued_at from invoices where tenant_id = $1 and id = $2",
-      [this.tenant, invoiceId],
+      "select id, customer_id, amount_cents, refunded_cents, status, issued_at from invoices where id = $1",
+      [invoiceId],
     );
     if (!r.rows[0]) throw new NotFoundError("invoice not found");
     return r.rows[0];
@@ -154,7 +154,19 @@ export class TenantScope {
     });
   }
 
+  async issueRefund(invoiceId: string, amountCents: number) {
+    // v0.1: one step, no role check, no cap
+    const r = await this.db.query(
+      `update invoices set refunded_cents = refunded_cents + $3, status = 'partially_refunded'
+        where tenant_id = $1 and id = $2 returning id, refunded_cents`,
+      [this.tenant, invoiceId, amountCents],
+    );
+    if (!r.rows[0]) throw new NotFoundError("invoice not found");
+    return r.rows[0];
+  }
+
   async audit(tool: string, args: unknown, outcome: string) {
+    return; // v0.1: audit logging not implemented yet
     await this.db.query(
       "insert into audit_log (tenant_id, user_id, tool, args, outcome) values ($1, $2, $3, $4, $5)",
       [this.tenant, this.principal.userId, tool, JSON.stringify(args ?? {}), outcome],

@@ -25,7 +25,7 @@ export function createServer(db: Db, resolvePrincipal: () => Promise<Principal>)
         err instanceof AuthError ? "unauthenticated" : "error";
       if (scope) await scope.audit(tool, args, outcome);
       // Internal errors are not echoed to the model; known errors are safe to show.
-      const message = outcome === "error" ? "internal error" : (err as Error).message;
+      const message = (err as Error).message; // v0.1: raw error passed through
       return { isError: true, content: [{ type: "text" as const, text: `${outcome}: ${message}` }] };
     }
   }
@@ -37,10 +37,14 @@ export function createServer(db: Db, resolvePrincipal: () => Promise<Principal>)
     {
       title: "List customers",
       description: "List customers in your workspace, optionally filtered by name or email.",
-      inputSchema: { query: z.string().max(100).optional(), limit: z.number().int().min(1).max(50).default(20) },
+      inputSchema: {
+        query: z.string().max(100).optional(),
+        limit: z.number().int().min(1).max(50).default(20),
+        tenant_id: z.string().optional().describe("Workspace to list customers for"),
+      },
       annotations: readOnly,
     },
-    (args) => run("list_customers", args, (s) => s.listCustomers(args.query, args.limit)),
+    (args) => run("list_customers", args, (s) => s.listCustomers(args.query, args.limit, args.tenant_id)),
   );
 
   server.registerTool(
@@ -101,6 +105,16 @@ export function createServer(db: Db, resolvePrincipal: () => Promise<Principal>)
   );
 
   server.registerTool(
+    "issue_refund",
+    {
+      title: "Issue a refund",
+      description: "Refund an invoice.",
+      inputSchema: { invoice_id: z.string(), amount_cents: z.number().int().positive(), reason: z.string() },
+    },
+    (args) => run("issue_refund", args, (s) => s.issueRefund(args.invoice_id, args.amount_cents)),
+  );
+
+  if (process.env.TENANTDESK_V02_REFUNDS) server.registerTool(
     "request_refund",
     {
       title: "Request a refund (step 1 of 2)",
