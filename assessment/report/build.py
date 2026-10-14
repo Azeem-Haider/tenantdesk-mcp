@@ -67,7 +67,7 @@ ul {{ margin:4px 0 8px 18px; padding:0; }}
     <div class="kicker">Application Security Assessment</div>
     <h1>TenantDesk v0.1.0</h1>
     <div class="sub">Multi-tenant SaaS: REST API, MCP server and Stripe webhook</div>
-    <p style="margin-top:28px">Prepared by <b>Azeem Haider</b>, Backend Integration Engineer<br>Assessment date: 14 October 2026 · Report version 1.0</p>
+    <p style="margin-top:28px">Prepared by <b>Azeem Haider</b>, Backend Integration Engineer<br>Sample report · Version 1.0</p>
   </div>
   <div class="note"><b>Sample report.</b> TenantDesk is a demo application built for this portfolio, and the issues in v0.1.0 were introduced on purpose to show the assessment process end to end. No client systems or real customer data were involved. Code and reproduction scripts: github.com/Azeem-Haider/tenantdesk-mcp (tag v0.1.0 for the assessed build, main for the fixed build).</div>
 </div>
