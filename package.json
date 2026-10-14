@@ -1,23 +1,36 @@
 {
   "name": "tenantdesk-mcp",
-  "version": "0.2.0",
-  "description": "A tenant-safe MCP server for a multi-tenant SaaS: Claude can read and act on data, but only inside the signed-in user's tenant and role.",
+  "version": "1.0.0",
+  "description": "Enterprise-grade, tenant-safe MCP server for a multi-tenant SaaS: OAuth 2.1 scopes, Postgres row-level security, idempotent Stripe refunds, audit log, rate limits and OpenTelemetry.",
   "scripts": {
-    "stdio": "tsx src/stdio.ts",
+    "dev": "tsx watch src/http.ts",
     "http": "tsx src/http.ts",
+    "stdio": "tsx src/stdio.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/http.js",
+    "migrate": "tsx scripts/migrate.ts",
     "token": "tsx scripts/issue-token.ts",
     "test": "tsx --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "test:postgres": "tsx --test --test-concurrency=1 test/postgres.test.ts",
+    "typecheck": "tsc --noEmit",
+    "poc": "tsx assessment/poc.ts"
   },
   "license": "MIT",
   "dependencies": {
     "@electric-sql/pglite": "^0.5.9",
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.223.0",
+    "@opentelemetry/sdk-node": "^0.223.0",
     "jose": "^5.10.0",
+    "pg": "^8.23.1",
+    "pino": "^9.14.0",
+    "stripe": "^23.0.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
+    "@types/pg": "^8.23.1",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3"
   },

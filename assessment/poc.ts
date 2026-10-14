@@ -11,7 +11,8 @@ import { SignJWT } from "jose";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createDb } from "../src/db.js";
-import { issueToken } from "../src/auth.js";
+import { createApp } from "../src/app.js";
+import { ALL_SCOPES, issueToken } from "../src/auth.js";
 import { startHttp } from "../src/http.js";
 
 type Result = { id: string; title: string; vulnerable: boolean; evidence: string };
@@ -19,7 +20,8 @@ const results: Result[] = [];
 
 async function main() {
   const db = await createDb();
-  const http = await startHttp(db, 0);
+  const app = await createApp({ db, env: { NODE_ENV: "test", LOG_LEVEL: "silent" } });
+  const http = await startHttp(app, 0);
   const base = `http://localhost:${(http.address() as AddressInfo).port}`;
   const ben = await issueToken("u_ben"); // Acme agent
   const ana = await issueToken("u_ana"); // Acme admin
@@ -115,8 +117,9 @@ async function main() {
 
   // TD-07 Stale privileges: role and tenant trusted from the token
   {
-    const forged = await new SignJWT({ tenant_id: "t_acme", role: "admin" })
-      .setProtectedHeader({ alg: "HS256" }).setSubject("u_cara").setIssuer("tenantdesk").setIssuedAt().setExpirationTime("1h")
+    // Validly signed and fully scoped, but claiming a role the database no longer gives her.
+    const forged = await new SignJWT({ tenant_id: "t_acme", role: "admin", scope: ALL_SCOPES.join(" ") })
+      .setProtectedHeader({ alg: "HS256" }).setSubject("u_cara").setIssuer("tenantdesk-dev").setIssuedAt().setExpirationTime("1h")
       .sign(new TextEncoder().encode(process.env.TENANTDESK_JWT_SECRET ?? "dev-only-secret-change-me-dev-only-secret"));
     // Cara is a viewer in the database; a token minted while she was admin should not keep admin rights.
     const m = await mcpAs(forged);
@@ -134,7 +137,8 @@ async function main() {
     const m = await mcpAs(ana);
     const r = await m.call("search_invoices", { from: "2026-13-45" });
     const text = r.content[0]?.text ?? "";
-    const leaks = /select|invoices|syntax|date\/time|postgres|stack/i.test(text);
+    // Ignore the tool's own name; flag SQL, table names, driver messages or stack traces.
+    const leaks = /select|invoices|syntax|date\/time|postgres|stack/i.test(text.replace(/search_invoices/g, ""));
     results.push({
       id: "TD-08", title: "Database error details exposed to the MCP client",
       vulnerable: leaks,

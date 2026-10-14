@@ -1,33 +1,58 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { Db } from "./db.js";
+import type { App } from "./app.js";
 import { AuthError, type Principal } from "./auth.js";
 import { ForbiddenError, NotFoundError, TenantScope, REFUND_LIMIT_CENTS } from "./repo.js";
+import { withSpan } from "./observability.js";
+
+export const SERVER_VERSION = "1.0.0";
+
+const idempotencyKey = z
+  .string()
+  .min(8)
+  .max(100)
+  .regex(/^[\w-]+$/)
+  .optional()
+  .describe("Optional. Reuse the same key when retrying so the action only happens once.");
 
 /**
  * Builds the MCP server for one caller. `resolvePrincipal` comes from the transport
  * (env token for stdio, Authorization header for HTTP). No tool takes a tenant or user id.
  */
-export function createServer(db: Db, resolvePrincipal: () => Promise<Principal>) {
-  const server = new McpServer({ name: "tenantdesk", version: "0.2.0" });
+export function createServer(app: App, resolvePrincipal: () => Promise<Principal>, requestId?: string) {
+  const server = new McpServer({ name: "tenantdesk", version: SERVER_VERSION });
 
   async function run(tool: string, args: unknown, fn: (scope: TenantScope) => Promise<unknown>) {
+    const started = performance.now();
     let scope: TenantScope | undefined;
-    try {
-      scope = new TenantScope(db, await resolvePrincipal());
-      const result = await fn(scope);
-      await scope.audit(tool, args, "ok");
-      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-    } catch (err) {
-      const outcome =
-        err instanceof ForbiddenError ? "denied" :
-        err instanceof NotFoundError ? "not_found" :
-        err instanceof AuthError ? "unauthenticated" : "error";
-      if (scope) await scope.audit(tool, args, outcome);
-      // Internal errors are not echoed to the model; known errors are safe to show.
-      const message = outcome === "error" ? "internal error" : (err as Error).message;
-      return { isError: true, content: [{ type: "text" as const, text: `${outcome}: ${message}` }] };
-    }
+    let outcome = "ok";
+    return withSpan(`mcp.tool ${tool}`, { "mcp.tool": tool }, async (span) => {
+      try {
+        scope = new TenantScope(app.db, await resolvePrincipal(), app.payments, requestId);
+        span.setAttribute("tenant.id", scope.principal.tenantId);
+        const result = await fn(scope);
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        outcome =
+          err instanceof ForbiddenError ? "denied" :
+          err instanceof NotFoundError ? "not_found" :
+          err instanceof AuthError ? "unauthenticated" : "error";
+        if (outcome === "error") app.log.error({ err, tool, requestId }, "tool failed");
+        // Internal errors are not echoed to the model; known errors are safe to show.
+        const message = outcome === "error" ? "internal error" : (err as Error).message;
+        return { isError: true, content: [{ type: "text" as const, text: `${outcome}: ${message}` }] };
+      } finally {
+        span.setAttribute("mcp.outcome", outcome);
+        if (scope) await scope.audit(tool, args, outcome).catch((err) => app.log.error({ err, tool }, "audit write failed"));
+        const ms = performance.now() - started;
+        app.metrics.inc("tenantdesk_tool_calls_total", "MCP tool calls by tool and outcome", { tool, outcome });
+        app.metrics.observeMs({ tool }, ms);
+        app.log.info(
+          { requestId, tool, outcome, tenant: scope?.principal.tenantId, user: scope?.principal.userId, ms: Math.round(ms) },
+          "tool call",
+        );
+      }
+    });
   }
 
   const readOnly = { readOnlyHint: true, openWorldHint: false };
@@ -62,8 +87,8 @@ export function createServer(db: Db, resolvePrincipal: () => Promise<Principal>)
       inputSchema: {
         status: z.enum(["paid", "open", "refunded", "partially_refunded"]).optional(),
         customer_id: z.string().max(64).optional(),
-        from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-        to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        from: z.iso.date().optional(),
+        to: z.iso.date().optional(),
         limit: z.number().int().min(1).max(100).default(25),
       },
       annotations: readOnly,
@@ -89,15 +114,16 @@ export function createServer(db: Db, resolvePrincipal: () => Promise<Principal>)
     "create_ticket",
     {
       title: "Create support ticket",
-      description: "Open a support ticket for a customer. Agents and admins only.",
+      description: "Open a support ticket for a customer. Agents and admins only; needs the tenantdesk:write scope.",
       inputSchema: {
         customer_id: z.string().max(64),
         subject: z.string().min(3).max(120),
         body: z.string().min(1).max(2000),
+        idempotency_key: idempotencyKey,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    (args) => run("create_ticket", args, (s) => s.createTicket(args.customer_id, args.subject, args.body)),
+    (args) => run("create_ticket", args, (s) => s.createTicket(args.customer_id, args.subject, args.body, args.idempotency_key)),
   );
 
   server.registerTool(
@@ -105,24 +131,26 @@ export function createServer(db: Db, resolvePrincipal: () => Promise<Principal>)
     {
       title: "Request a refund (step 1 of 2)",
       description:
-        `Prepare a refund on a paid invoice. Admins only, max $${REFUND_LIMIT_CENTS / 100}. ` +
+        `Prepare a refund on a paid invoice. Admins only, needs the tenantdesk:refunds scope, max $${REFUND_LIMIT_CENTS / 100}. ` +
         "Returns a confirmation_id; nothing is refunded until confirm_refund is called with it. " +
         "Always show the amount to the user and get their explicit OK before confirming.",
       inputSchema: {
         invoice_id: z.string().max(64),
         amount_cents: z.number().int().positive(),
         reason: z.string().min(5).max(300),
+        idempotency_key: idempotencyKey,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
-    (args) => run("request_refund", args, (s) => s.requestRefund(args.invoice_id, args.amount_cents, args.reason)),
+    (args) =>
+      run("request_refund", args, (s) => s.requestRefund(args.invoice_id, args.amount_cents, args.reason, args.idempotency_key)),
   );
 
   server.registerTool(
     "confirm_refund",
     {
       title: "Confirm a refund (step 2 of 2)",
-      description: "Execute a refund prepared by request_refund. Only after the user explicitly approved the amount.",
+      description: "Execute a refund prepared by request_refund, through Stripe. Only after the user explicitly approved the amount.",
       inputSchema: { confirmation_id: z.string().max(80) },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },

@@ -1,0 +1,38 @@
+# Local stack: Postgres 16 + TenantDesk, with optional Jaeger for traces.
+#   docker compose up --build                     app on http://localhost:3333
+#   docker compose --profile tracing up --build   plus Jaeger UI on http://localhost:16686
+# Production runs AUTH_MODE=oidc and NODE_ENV=production; this file is for local use.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: tenantdesk
+      POSTGRES_PASSWORD: tenantdesk
+      POSTGRES_DB: tenantdesk
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tenantdesk"]
+      interval: 3s
+      retries: 20
+    volumes: [pgdata:/var/lib/postgresql/data]
+
+  app:
+    build: .
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgres://tenantdesk:tenantdesk@db:5432/tenantdesk
+      SEED_DEMO: "true"
+      AUTH_MODE: dev
+      TENANTDESK_JWT_SECRET: local-compose-secret-change-me-0123456789
+      PUBLIC_URL: http://localhost:3333
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    ports: ["3333:3333"]
+
+  jaeger:
+    profiles: [tracing]
+    image: jaegertracing/all-in-one:1.62.0
+    ports: ["16686:16686", "4318:4318"]
+
+volumes:
+  pgdata:
