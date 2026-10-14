@@ -1,0 +1,257 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Security Assessment Report - TenantDesk</title>
+<style>
+@page { size: A4; margin: 18mm 16mm 20mm; }
+* { box-sizing: border-box; }
+body { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; color:#1e293b; font-size:10.5pt; line-height:1.5; margin:0; }
+h1 { font-size:26pt; margin:0 0 6px; color:#0f172a; }
+h2 { font-size:15pt; color:#0f172a; border-bottom:2px solid #0f172a; padding-bottom:4px; margin:28px 0 12px; page-break-after:avoid; }
+h3 { font-size:12.5pt; margin:0; }
+h4 { font-size:10pt; text-transform:uppercase; letter-spacing:.04em; color:#475569; margin:12px 0 2px; }
+p { margin:4px 0 8px; }
+code, .mono { font-family: "SF Mono", Menlo, Consolas, monospace; font-size:9.3pt; }
+.small { font-size:8.5pt; }
+pre { background:#0f172a; color:#e2e8f0; padding:10px 12px; border-radius:6px; font-size:8.8pt; white-space:pre-wrap; margin:4px 0 8px; }
+table { border-collapse:collapse; width:100%; }
+th, td { text-align:left; padding:6px 8px; border-bottom:1px solid #e2e8f0; vertical-align:top; }
+thead th { background:#f1f5f9; font-size:9pt; text-transform:uppercase; letter-spacing:.03em; }
+.badge { color:#fff; padding:2px 8px; border-radius:10px; font-size:8.5pt; font-weight:600; white-space:nowrap; }
+.ok { color:#15803d; font-weight:600; } .bad { color:#b91c1c; font-weight:600; }
+.cover { height:250mm; display:flex; flex-direction:column; justify-content:space-between; page-break-after:always; }
+.cover .top { border-left:6px solid #0f172a; padding-left:18px; margin-top:40mm; }
+.kicker { text-transform:uppercase; letter-spacing:.12em; color:#64748b; font-size:9pt; font-weight:600; }
+.sub { font-size:13pt; color:#334155; margin-top:6px; }
+.note { background:#fff7ed; border:1px solid #fed7aa; padding:10px 12px; border-radius:6px; font-size:9.5pt; }
+.cards { display:flex; gap:10px; margin:12px 0; }
+.card { flex:1; border:1px solid #e2e8f0; border-radius:8px; padding:10px; text-align:center; }
+.card b { display:block; font-size:22pt; }
+.finding { page-break-inside:avoid; border:1px solid #e2e8f0; border-radius:8px; padding:14px 16px; margin:14px 0; }
+.fhead { display:flex; gap:10px; align-items:baseline; margin-bottom:8px; }
+.fid { background:#0f172a; color:#fff; padding:2px 7px; border-radius:4px; }
+.meta th { width:110px; color:#475569; font-weight:600; border:none; padding:2px 8px 2px 0; }
+.meta td { border:none; padding:2px 0; }
+ul { margin:4px 0 8px 18px; padding:0; }
+</style></head><body>
+
+<div class="cover">
+  <div class="top">
+    <div class="kicker">Application Security Assessment</div>
+    <h1>TenantDesk v0.1.0</h1>
+    <div class="sub">Multi-tenant SaaS: REST API, MCP server and Stripe webhook</div>
+    <p style="margin-top:28px">Prepared by <b>Azeem Haider</b>, Backend Integration Engineer<br>Assessment date: 14 October 2026 · Report version 1.0</p>
+  </div>
+  <div class="note"><b>Sample report.</b> TenantDesk is a demo application built for this portfolio, and the issues in v0.1.0 were introduced on purpose to show the assessment process end to end. No client systems or real customer data were involved. Code and reproduction scripts: github.com/Azeem-Haider/tenantdesk-mcp (tag v0.1.0 for the assessed build, main for the fixed build).</div>
+</div>
+
+<h2>1. Executive summary</h2>
+<p>TenantDesk lets several clinics share one platform, with an AI assistant (via MCP) that reads and acts on their data. The assessment asked one question first: <b>can one clinic, or an AI acting for it, reach another clinic's data or money?</b></p>
+<p>In v0.1.0 the answer was <b>yes, in three separate ways</b>: a changed parameter in the customer export, an invoice lookup without a tenant check, and an AI tool that accepted a tenant id from the model. The Stripe webhook also accepted forged payment events from anyone on the internet, and the AI refund tool let any staff member refund any amount in a single call.</p>
+<div class="cards">
+  <div class="card"><b style="color:#c2410c">3</b>High</div>
+  <div class="card"><b style="color:#b45309">6</b>Medium</div>
+  <div class="card"><b style="color:#0e7490">0</b>Low</div>
+  <div class="card"><b style="color:#475569">1</b>Informational</div>
+</div>
+<p><b>Outcome:</b> all 10 findings were fixed in v0.2.0 and every one was retested with the same proof-of-concept script, which now reports <b>0 of 10 vulnerable</b>. The fixes are structural (one tenant-scoped data layer, verified webhooks, two-step refunds), so the same classes of bug are unlikely to come back with new features.</p>
+
+<h2>2. Scope and rules of engagement</h2>
+<table>
+<tr><th style="width:150px">Target</th><td>TenantDesk v0.1.0 (git tag <code>v0.1.0</code>), run locally with seeded demo data</td></tr>
+<tr><th>In scope</th><td>REST API (<code>/api/customers/export</code>, <code>/api/invoices/:id</code>); MCP server over Streamable HTTP and stdio (7 tools); Stripe webhook (<code>/webhooks/stripe</code>); authentication and authorization; data layer</td></tr>
+<tr><th>Out of scope</th><td>Infrastructure, hosting and network; denial-of-service; third-party services (Stripe itself, the AI model provider); social engineering</td></tr>
+<tr><th>Test accounts</th><td>Two tenants (Acme Dental, Brightside Clinic) with admin, agent and viewer users</td></tr>
+<tr><th>Approach</th><td>Grey box: source code available, plus authenticated testing as each role</td></tr>
+<tr><th>Data</th><td>Synthetic only. No production systems were touched.</td></tr>
+</table>
+
+<h2>3. Method</h2>
+<ul>
+<li><b>Threat model first:</b> for each entry point, who can call it, what identity it trusts, and what it can change.</li>
+<li><b>Checklists:</b> OWASP API Security Top 10 (2023), OWASP Top 10 (2021) and selected OWASP ASVS 4.0 Level 2 controls for access control, authentication, error handling and logging.</li>
+<li><b>AI/MCP-specific:</b> tool arguments treated as attacker-controlled (prompt injection), privilege of AI actions, human confirmation for money-moving tools, auditability.</li>
+<li><b>Payments:</b> webhook authenticity, replay windows, duplicate delivery and idempotency.</li>
+<li><b>Evidence:</b> every finding is backed by a scripted proof of concept (<code>assessment/poc.ts</code>) so it can be reproduced and retested exactly.</li>
+</ul>
+<p><b>Severity:</b> CVSS v3.1 base score, with business impact noted where it differs (for example TD-06, which moves money).</p>
+
+<h2>4. Findings summary</h2>
+<table><thead><tr><th>ID</th><th>Finding</th><th>Severity</th><th>CVSS</th><th>Status</th></tr></thead><tbody><tr><td class="mono">TD-01</td><td>Cross-tenant customer export via tenant_id parameter</td><td><span class="badge" style="background:#c2410c">High</span></td><td class="mono">7.7</td><td class="ok">Fixed</td></tr><tr><td class="mono">TD-02</td><td>Insecure direct object reference on GET /api/invoices/:id</td><td><span class="badge" style="background:#b45309">Medium</span></td><td class="mono">5.0</td><td class="ok">Fixed</td></tr><tr><td class="mono">TD-03</td><td>MCP tool accepts tenant_id from the model (prompt-injection data access)</td><td><span class="badge" style="background:#c2410c">High</span></td><td class="mono">7.7</td><td class="ok">Fixed</td></tr><tr><td class="mono">TD-04</td><td>Stripe webhook accepted without signature verification</td><td><span class="badge" style="background:#c2410c">High</span></td><td class="mono">7.5</td><td class="ok">Fixed</td></tr><tr><td class="mono">TD-05</td><td>Webhook events not de-duplicated; refunds double-counted on retry</td><td><span class="badge" style="background:#b45309">Medium</span></td><td class="mono">5.3</td><td class="ok">Fixed</td></tr><tr><td class="mono">TD-06</td><td>Refund tool missing role check, amount cap and human confirmation</td><td><span class="badge" style="background:#b45309">Medium</span></td><td class="mono">6.5</td><td class="ok">Fixed</td></tr><tr><td class="mono">TD-07</td><td>Role and tenant taken from token claims; downgraded users keep old rights</td><td><span class="badge" style="background:#b45309">Medium</span></td><td class="mono">4.2</td><td class="ok">Fixed</td></tr><tr><td class="mono">TD-08</td><td>Database error details exposed to the MCP client</td><td><span class="badge" style="background:#b45309">Medium</span></td><td class="mono">4.3</td><td class="ok">Fixed</td></tr><tr><td class="mono">TD-09</td><td>CSV export allows spreadsheet formula injection</td><td><span class="badge" style="background:#b45309">Medium</span></td><td class="mono">5.4</td><td class="ok">Fixed</td></tr><tr><td class="mono">TD-10</td><td>No audit trail of actions taken through MCP tools</td><td><span class="badge" style="background:#475569">Informational</span></td><td class="mono">n/a</td><td class="ok">Fixed</td></tr></tbody></table>
+
+<h2>5. Detailed findings</h2>
+
+<section class="finding">
+  <div class="fhead"><span class="mono fid">TD-01</span><h3>Cross-tenant customer export via tenant_id parameter</h3></div>
+  <table class="meta">
+    <tr><th>Severity</th><td><span class="badge" style="background:#c2410c">High</span> &nbsp;CVSS 7.7</td></tr>
+    <tr><th>Vector</th><td class="mono small">CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:N/A:N</td></tr>
+    <tr><th>Component</th><td>REST API · src/api.ts, src/repo.ts (listCustomers)</td></tr>
+    <tr><th>Status</th><td class="ok">Fixed in v0.2.0, verified on retest</td></tr>
+  </table>
+  <h4>Description</h4><p>The customer export endpoint accepts an optional <code>tenant_id</code> query parameter and passes it to the data layer, which uses it instead of the caller's own tenant. Any signed-in user can download the full customer list (names, emails, plans) of any other clinic by changing one parameter.</p>
+  <h4>Steps to reproduce</h4><pre>GET /api/customers/export?tenant_id=t_bright
+Authorization: Bearer &lt;token for u_ben, Acme Dental agent&gt;</pre>
+  <h4>Evidence</h4><p>HTTP 200, CSV contains Brightside Clinic customers (e.g. "Sam Okafor").</p>
+  <h4>Impact</h4><p>Full cross-tenant disclosure of customer personal data. This is the most serious class of bug in a multi-tenant SaaS: one customer can read another customer's data, which is reportable under GDPR and usually ends contracts.</p>
+  <h4>Recommendation</h4><p>Never accept a tenant identifier from the request. Derive the tenant from the authenticated session only, and enforce it in the shared data layer so no endpoint can override it. Add Postgres row-level security as a second barrier.</p>
+  <h4>Retest</h4><p>v0.2.0: the parameter is ignored; <code>TenantScope</code> always filters by the session tenant. Retest returned only Acme data.</p>
+</section>
+<section class="finding">
+  <div class="fhead"><span class="mono fid">TD-02</span><h3>Insecure direct object reference on GET /api/invoices/:id</h3></div>
+  <table class="meta">
+    <tr><th>Severity</th><td><span class="badge" style="background:#b45309">Medium</span> &nbsp;CVSS 5.0</td></tr>
+    <tr><th>Vector</th><td class="mono small">CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:L/I:N/A:N</td></tr>
+    <tr><th>Component</th><td>REST API · src/repo.ts (getInvoice)</td></tr>
+    <tr><th>Status</th><td class="ok">Fixed in v0.2.0, verified on retest</td></tr>
+  </table>
+  <h4>Description</h4><p>The invoice lookup queries by invoice id only, without a tenant filter. A user who knows or guesses another tenant's invoice id can read its amount, status and customer reference.</p>
+  <h4>Steps to reproduce</h4><pre>GET /api/invoices/inv_b1
+Authorization: Bearer &lt;token for u_ben, Acme Dental agent&gt;</pre>
+  <h4>Evidence</h4><p>HTTP 200 with Brightside Clinic invoice inv_b1.</p>
+  <h4>Impact</h4><p>Cross-tenant disclosure of billing data. Invoice ids are short and sequential-looking, so enumeration is practical.</p>
+  <h4>Recommendation</h4><p>Scope every lookup by tenant (<code>where tenant_id = $session_tenant and id = $id</code>) and return the same 404 for "belongs to someone else" and "does not exist".</p>
+  <h4>Retest</h4><p>v0.2.0: lookup is tenant-scoped; retest returned 404.</p>
+</section>
+<section class="finding">
+  <div class="fhead"><span class="mono fid">TD-03</span><h3>MCP tool accepts tenant_id from the model (prompt-injection data access)</h3></div>
+  <table class="meta">
+    <tr><th>Severity</th><td><span class="badge" style="background:#c2410c">High</span> &nbsp;CVSS 7.7</td></tr>
+    <tr><th>Vector</th><td class="mono small">CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:N/A:N</td></tr>
+    <tr><th>Component</th><td>MCP server · src/server.ts (list_customers)</td></tr>
+    <tr><th>Status</th><td class="ok">Fixed in v0.2.0, verified on retest</td></tr>
+  </table>
+  <h4>Description</h4><p>The <code>list_customers</code> tool exposes a <code>tenant_id</code> argument. The AI model fills tool arguments, so any text the model reads (a support ticket, an email, a document) can instruct it to pass another tenant's id. The server trusts the argument.</p>
+  <h4>Steps to reproduce</h4><pre>tools/call list_customers {"tenant_id": "t_bright"}
+(as u_ben, Acme Dental agent, over the MCP HTTP endpoint)</pre>
+  <h4>Evidence</h4><p>Tool returned Brightside Clinic customers.</p>
+  <h4>Impact</h4><p>Same data exposure as TD-01, but reachable through prompt injection: an attacker never needs credentials, only a way to get text in front of the model.</p>
+  <h4>Recommendation</h4><p>MCP tools must not take tenant, user or role identifiers. Resolve the principal from the transport (verified token) and apply it server-side. Treat every tool argument as attacker-controlled.</p>
+  <h4>Retest</h4><p>v0.2.0: no tool accepts a tenant id; extra arguments are dropped. Retest returned only Acme data.</p>
+</section>
+<section class="finding">
+  <div class="fhead"><span class="mono fid">TD-04</span><h3>Stripe webhook accepted without signature verification</h3></div>
+  <table class="meta">
+    <tr><th>Severity</th><td><span class="badge" style="background:#c2410c">High</span> &nbsp;CVSS 7.5</td></tr>
+    <tr><th>Vector</th><td class="mono small">CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N</td></tr>
+    <tr><th>Component</th><td>Webhook · src/api.ts (handleStripeWebhook)</td></tr>
+    <tr><th>Status</th><td class="ok">Fixed in v0.2.0, verified on retest</td></tr>
+  </table>
+  <h4>Description</h4><p>The <code>/webhooks/stripe</code> endpoint parses and acts on any JSON body. It does not check the <code>Stripe-Signature</code> header, so anyone on the internet can send fake payment events.</p>
+  <h4>Steps to reproduce</h4><pre>POST /webhooks/stripe
+{"id":"evt_forged_1","type":"invoice.paid","data":{"object":{"metadata":{"invoice_id":"inv_a2"}}}}
+(no signature header, no authentication)</pre>
+  <h4>Evidence</h4><p>HTTP 200; open invoice inv_a2 changed to "paid".</p>
+  <h4>Impact</h4><p>Unauthenticated attackers can mark invoices as paid (getting service without paying) or trigger any other webhook-driven state change.</p>
+  <h4>Recommendation</h4><p>Verify the HMAC-SHA256 signature over the raw body with the endpoint secret, compare in constant time, and reject events outside a 5-minute timestamp window.</p>
+  <h4>Retest</h4><p>v0.2.0: signature and timestamp verified; retest got HTTP 400 and the invoice stayed open.</p>
+</section>
+<section class="finding">
+  <div class="fhead"><span class="mono fid">TD-05</span><h3>Webhook events not de-duplicated; refunds double-counted on retry</h3></div>
+  <table class="meta">
+    <tr><th>Severity</th><td><span class="badge" style="background:#b45309">Medium</span> &nbsp;CVSS 5.3</td></tr>
+    <tr><th>Vector</th><td class="mono small">CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N</td></tr>
+    <tr><th>Component</th><td>Webhook · src/api.ts</td></tr>
+    <tr><th>Status</th><td class="ok">Fixed in v0.2.0, verified on retest</td></tr>
+  </table>
+  <h4>Description</h4><p>Stripe delivers events at least once and retries on timeouts. The handler processes every delivery and adds the refunded amount each time instead of storing Stripe's running total.</p>
+  <h4>Steps to reproduce</h4><pre>Deliver the same signed charge.refunded event (amount_refunded: 2000) three times.</pre>
+  <h4>Evidence</h4><p>Invoice refunded_cents became 6000 instead of 2000.</p>
+  <h4>Impact</h4><p>Financial records drift from Stripe; refunds and revenue reports are wrong. Happens on its own during normal Stripe retries, and on purpose when combined with TD-04.</p>
+  <h4>Recommendation</h4><p>Record each event id in a processed-events table and skip duplicates. Write absolute values from the event (Stripe's totals), never increments.</p>
+  <h4>Retest</h4><p>v0.2.0: events de-duplicated by id; refund total is set, not added. Retest: refunded_cents = 2000.</p>
+</section>
+<section class="finding">
+  <div class="fhead"><span class="mono fid">TD-06</span><h3>Refund tool missing role check, amount cap and human confirmation</h3></div>
+  <table class="meta">
+    <tr><th>Severity</th><td><span class="badge" style="background:#b45309">Medium</span> &nbsp;CVSS 6.5</td></tr>
+    <tr><th>Vector</th><td class="mono small">CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N</td></tr>
+    <tr><th>Component</th><td>MCP server · src/server.ts, src/repo.ts (issue_refund)</td></tr>
+    <tr><th>Status</th><td class="ok">Fixed in v0.2.0, verified on retest</td></tr>
+  </table>
+  <h4>Description</h4><p>The <code>issue_refund</code> tool refunds immediately in one call, for any amount, for any signed-in role. The model can trigger it on its own, including after a prompt injection.</p>
+  <h4>Steps to reproduce</h4><pre>tools/call issue_refund {"invoice_id":"inv_a1","amount_cents":12000,"reason":"..."}
+(as u_ben, an agent, not an admin)</pre>
+  <h4>Evidence</h4><p>Full $120.00 refunded by an agent with no confirmation step.</p>
+  <h4>Impact</h4><p>Direct money loss. Business impact is higher than the CVSS score suggests, because one manipulated conversation can issue refunds.</p>
+  <h4>Recommendation</h4><p>Split money-moving actions into request and confirm steps, restrict to admins, cap the amount the AI may start, bind the confirmation to the same user and a short expiry, and mark the tool as destructive so MCP clients ask the human.</p>
+  <h4>Retest</h4><p>v0.2.0: request_refund + confirm_refund, admin only, $500 cap, same-admin, 10-minute expiry, single use. Retest: agent denied, nothing refunded.</p>
+</section>
+<section class="finding">
+  <div class="fhead"><span class="mono fid">TD-07</span><h3>Role and tenant taken from token claims; downgraded users keep old rights</h3></div>
+  <table class="meta">
+    <tr><th>Severity</th><td><span class="badge" style="background:#b45309">Medium</span> &nbsp;CVSS 4.2</td></tr>
+    <tr><th>Vector</th><td class="mono small">CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:L/I:L/A:N</td></tr>
+    <tr><th>Component</th><td>Auth · src/auth.ts (principalFromToken)</td></tr>
+    <tr><th>Status</th><td class="ok">Fixed in v0.2.0, verified on retest</td></tr>
+  </table>
+  <h4>Description</h4><p>If a token carries <code>tenant_id</code> and <code>role</code> claims, they are trusted without checking the database. A user who is downgraded or removed keeps their old role until the token expires (8 hours).</p>
+  <h4>Steps to reproduce</h4><pre>Use a valid token minted with role=admin for u_cara, whose current role is viewer, and call create_ticket.</pre>
+  <h4>Evidence</h4><p>Ticket created by a user who is a viewer in the database.</p>
+  <h4>Impact</h4><p>Revocation doesn't take effect; a fired employee or downgraded user keeps access for hours.</p>
+  <h4>Recommendation</h4><p>Put only the user id in the token and load tenant and role from the database on each request (or keep tokens very short-lived with a revocation list).</p>
+  <h4>Retest</h4><p>v0.2.0: claims ignored; role and tenant loaded per call. Retest: denied.</p>
+</section>
+<section class="finding">
+  <div class="fhead"><span class="mono fid">TD-08</span><h3>Database error details exposed to the MCP client</h3></div>
+  <table class="meta">
+    <tr><th>Severity</th><td><span class="badge" style="background:#b45309">Medium</span> &nbsp;CVSS 4.3</td></tr>
+    <tr><th>Vector</th><td class="mono small">CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N</td></tr>
+    <tr><th>Component</th><td>MCP server · src/server.ts (error handling)</td></tr>
+    <tr><th>Status</th><td class="ok">Fixed in v0.2.0, verified on retest</td></tr>
+  </table>
+  <h4>Description</h4><p>Unexpected errors are returned to the client verbatim, including raw Postgres messages.</p>
+  <h4>Steps to reproduce</h4><pre>tools/call search_invoices {"from":"2026-13-45"}</pre>
+  <h4>Evidence</h4><p>Response: <code>date/time field value out of range: "2026-13-45"</code></p>
+  <h4>Impact</h4><p>Reveals the database engine and query structure, which helps an attacker craft further attacks; also puts internal details into AI conversation logs.</p>
+  <h4>Recommendation</h4><p>Return generic messages for unexpected errors, log the detail server-side with a correlation id, and validate inputs strictly before they reach the database.</p>
+  <h4>Retest</h4><p>v0.2.0: unexpected errors return "internal error". Retest confirmed.</p>
+</section>
+<section class="finding">
+  <div class="fhead"><span class="mono fid">TD-09</span><h3>CSV export allows spreadsheet formula injection</h3></div>
+  <table class="meta">
+    <tr><th>Severity</th><td><span class="badge" style="background:#b45309">Medium</span> &nbsp;CVSS 5.4</td></tr>
+    <tr><th>Vector</th><td class="mono small">CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:C/C:L/I:L/A:N</td></tr>
+    <tr><th>Component</th><td>REST API · src/api.ts (csvCell)</td></tr>
+    <tr><th>Status</th><td class="ok">Fixed in v0.2.0, verified on retest</td></tr>
+  </table>
+  <h4>Description</h4><p>Customer fields are written to CSV unchanged. A value starting with <code>=</code>, <code>+</code>, <code>-</code> or <code>@</code> becomes a live formula when staff open the export in Excel or Google Sheets.</p>
+  <h4>Steps to reproduce</h4><pre>Set a customer name to =HYPERLINK("http://evil.test","Click") and export as an admin.</pre>
+  <h4>Evidence</h4><p>Exported cell contains the live formula.</p>
+  <h4>Impact</h4><p>Phishing links or data-exfiltration formulas run in staff spreadsheets.</p>
+  <h4>Recommendation</h4><p>Prefix cells that start with formula characters with a single quote and quote-escape every cell.</p>
+  <h4>Retest</h4><p>v0.2.0: formula characters neutralised. Retest: exported as text.</p>
+</section>
+<section class="finding">
+  <div class="fhead"><span class="mono fid">TD-10</span><h3>No audit trail of actions taken through MCP tools</h3></div>
+  <table class="meta">
+    <tr><th>Severity</th><td><span class="badge" style="background:#475569">Informational</span> &nbsp;CVSS n/a</td></tr>
+    <tr><th>Vector</th><td class="mono small">Not scored</td></tr>
+    <tr><th>Component</th><td>MCP server · src/repo.ts (audit)</td></tr>
+    <tr><th>Status</th><td class="ok">Fixed in v0.2.0, verified on retest</td></tr>
+  </table>
+  <h4>Description</h4><p>Tool calls made by the AI, including refunds and data reads, are not recorded.</p>
+  <h4>Steps to reproduce</h4><pre>Run the checks above and inspect audit_log.</pre>
+  <h4>Evidence</h4><p>0 rows after 9 tool and API actions.</p>
+  <h4>Impact</h4><p>No way to investigate what the AI did, who asked it, or whether data was accessed after an incident.</p>
+  <h4>Recommendation</h4><p>Log every tool call with tenant, user, tool, arguments and outcome, including denied calls, and alert on spikes of denials.</p>
+  <h4>Retest</h4><p>v0.2.0: every call logged, allowed or denied.</p>
+</section>
+
+<h2>6. Retest results</h2>
+<p>The same script was run against the assessed build (v0.1.0) and the fixed build (v0.2.0).</p>
+<table><thead><tr><th>ID</th><th>Finding</th><th>v0.1.0</th><th>v0.2.0</th></tr></thead><tbody><tr><td class="mono">TD-01</td><td>Cross-tenant customer export via tenant_id parameter</td><td class="bad">Vulnerable</td><td class="ok">Not vulnerable</td></tr><tr><td class="mono">TD-02</td><td>Insecure direct object reference on GET /api/invoices/:id</td><td class="bad">Vulnerable</td><td class="ok">Not vulnerable</td></tr><tr><td class="mono">TD-03</td><td>MCP tool accepts tenant_id from the model (prompt-injection data access)</td><td class="bad">Vulnerable</td><td class="ok">Not vulnerable</td></tr><tr><td class="mono">TD-04</td><td>Stripe webhook accepted without signature verification</td><td class="bad">Vulnerable</td><td class="ok">Not vulnerable</td></tr><tr><td class="mono">TD-05</td><td>Webhook events not de-duplicated; refunds double-counted on retry</td><td class="bad">Vulnerable</td><td class="ok">Not vulnerable</td></tr><tr><td class="mono">TD-06</td><td>Refund tool missing role check, amount cap and human confirmation</td><td class="bad">Vulnerable</td><td class="ok">Not vulnerable</td></tr><tr><td class="mono">TD-07</td><td>Role and tenant taken from token claims; downgraded users keep old rights</td><td class="bad">Vulnerable</td><td class="ok">Not vulnerable</td></tr><tr><td class="mono">TD-08</td><td>Database error details exposed to the MCP client</td><td class="bad">Vulnerable</td><td class="ok">Not vulnerable</td></tr><tr><td class="mono">TD-09</td><td>CSV export allows spreadsheet formula injection</td><td class="bad">Vulnerable</td><td class="ok">Not vulnerable</td></tr><tr><td class="mono">TD-10</td><td>No audit trail of actions taken through MCP tools</td><td class="bad">Vulnerable</td><td class="ok">Not vulnerable</td></tr></tbody></table>
+
+<h2>7. Recommendations beyond the fixes</h2>
+<ul>
+<li><b>Defence in depth for tenancy:</b> add Postgres row-level security keyed on a per-request tenant setting, so a missed filter in code is still blocked by the database.</li>
+<li><b>Cross-tenant tests in CI:</b> keep a test per endpoint and per MCP tool that tries another tenant's ids. They are cheap and catch regressions immediately.</li>
+<li><b>MCP tool design rules:</b> no identity arguments, read and write tools separated, destructive tools marked and confirmed by a human, inputs validated by schema.</li>
+<li><b>Webhook checklist:</b> verify signature on the raw body, enforce a timestamp window, de-duplicate by event id, write absolute values, respond fast and process asynchronously.</li>
+<li><b>Monitoring:</b> alert on spikes of denied tool calls and cross-tenant 404s; both are early signs of probing or prompt injection.</li>
+<li><b>Identity:</b> move from shared-secret JWTs to the company identity provider (OAuth 2.1 / OIDC) before production.</li>
+</ul>
+
+<h2>Appendix: reproduce this report</h2>
+<pre>git clone https://github.com/Azeem-Haider/tenantdesk-mcp
+cd tenantdesk-mcp &amp;&amp; npm install
+git checkout v0.1.0 &amp;&amp; npx tsx assessment/poc.ts   # 10 of 10 vulnerable
+git checkout main   &amp;&amp; npx tsx assessment/poc.ts   # 0 of 10 vulnerable</pre>
+</body></html>

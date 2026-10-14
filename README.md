@@ -87,6 +87,16 @@ Every request needs `Authorization: Bearer <token>`. Requests without one get `4
 TENANTDESK_TOKEN=$(npm run -s token u_ben) npx @modelcontextprotocol/inspector npx tsx src/stdio.ts
 ```
 
+## Security assessment
+
+[`assessment/report/TenantDesk-Security-Assessment-Report.pdf`](assessment/report/TenantDesk-Security-Assessment-Report.pdf) is a full sample report: scope, method, 10 findings with CVSS scores, reproduction steps, fixes and retest.
+The assessed build is tag [`v0.1.0`](../../tree/v0.1.0) (deliberately vulnerable); `main` is the fixed build.
+
+```bash
+git checkout v0.1.0 && npx tsx assessment/poc.ts   # 10 of 10 vulnerable
+git checkout main   && npx tsx assessment/poc.ts   # 0 of 10 vulnerable
+```
+
 ## Tests
 
 `npm test` connects a real MCP client to the server and checks, among others:

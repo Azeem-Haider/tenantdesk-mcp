@@ -1,0 +1,22 @@
+TD-01  VULNERABLE      Cross-tenant customer export via tenant_id parameter
+      GET /api/customers/export?tenant_id=t_bright as Acme agent -> 200, Brightside customers returned
+TD-02  VULNERABLE      Insecure direct object reference on GET /api/invoices/:id
+      GET /api/invoices/inv_b1 (Brightside) as Acme agent -> 200
+TD-03  VULNERABLE      MCP tool accepts tenant_id from the model (prompt-injection data access)
+      list_customers {tenant_id:"t_bright"} as Acme agent -> Brightside customers returned
+TD-04  VULNERABLE      Stripe webhook accepted without signature verification
+      unsigned invoice.paid for open invoice inv_a2 -> HTTP 200, invoice status now 'paid'
+TD-05  VULNERABLE      Webhook events not de-duplicated; refunds double-counted on retry
+      same charge.refunded ($20.00) delivered 3 times -> refunded_cents = 6000
+TD-06  VULNERABLE      Refund tool missing role check, amount cap and human confirmation
+      Acme agent calls refund for full $120.00 -> request_refund: denied, issue_refund: accepted, refunded_cents now 12000
+TD-07  VULNERABLE      Role and tenant taken from token claims; downgraded users keep old rights
+      token with role=admin for user who is now a viewer -> create_ticket succeeded
+TD-08  VULNERABLE      Database error details exposed to the MCP client
+      search_invoices {from:"2026-13-45"} -> "error: date/time field value out of range: "2026-13-45""
+TD-09  VULNERABLE      CSV export allows spreadsheet formula injection
+      customer name starting with '=' exported as a live formula
+TD-10  VULNERABLE      No audit trail of actions taken through MCP tools
+      audit_log rows after the checks above: 0
+
+10 of 10 checks vulnerable
