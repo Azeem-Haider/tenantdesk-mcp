@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import type { Db } from "./db.js";
 import type { Principal, Role } from "./auth.js";
 
-export class ForbiddenError extends Error {}
+export class ForbiddenError extends Error {
+  name = "ForbiddenError";
+}
 export class NotFoundError extends Error {}
 
 /** Largest refund the AI is allowed to start, in cents. Bigger refunds go through the dashboard. */
@@ -63,6 +65,15 @@ export class TenantScope {
       [this.tenant, f.status ?? null, f.customerId ?? null, f.from ?? null, f.to ?? null, f.limit],
     );
     return r.rows;
+  }
+
+  async getInvoice(invoiceId: string) {
+    const r = await this.db.query(
+      "select id, customer_id, amount_cents, refunded_cents, status, issued_at from invoices where tenant_id = $1 and id = $2",
+      [this.tenant, invoiceId],
+    );
+    if (!r.rows[0]) throw new NotFoundError("invoice not found");
+    return r.rows[0];
   }
 
   async ticketHistory(customerId: string) {

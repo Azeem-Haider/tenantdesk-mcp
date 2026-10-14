@@ -3,14 +3,20 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createDb, type Db } from "./db.js";
 import { AuthError, principalFromToken } from "./auth.js";
 import { createServer } from "./server.js";
+import { handleApi, handleStripeWebhook, readBody } from "./api.js";
 
 /**
- * Remote mode: Streamable HTTP, stateless. Every request must carry
- * `Authorization: Bearer <token>`; the principal is resolved per request.
+ * One HTTP server for the whole app:
+ *   POST /mcp              MCP over Streamable HTTP (stateless, bearer auth per request)
+ *   GET  /api/...          REST endpoints for the web app
+ *   POST /webhooks/stripe  Stripe webhook (signature-verified)
  */
 export async function startHttp(db: Db, port: number) {
   const http = createHttpServer(async (req: IncomingMessage, res: ServerResponse) => {
-    if (req.url !== "/mcp") {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    if (url.pathname === "/webhooks/stripe" && req.method === "POST") return handleStripeWebhook(db, req, res);
+    if (url.pathname.startsWith("/api/")) return handleApi(db, req, res, url);
+    if (url.pathname !== "/mcp") {
       res.writeHead(404).end();
       return;
     }
@@ -25,9 +31,8 @@ export async function startHttp(db: Db, port: number) {
       res.end(JSON.stringify({ error: msg }));
       return;
     }
-    const chunks: Buffer[] = [];
-    for await (const c of req) chunks.push(c as Buffer);
-    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : undefined;
+    const raw = await readBody(req);
+    const body = raw ? JSON.parse(raw) : undefined;
 
     const server = createServer(db, async () => principal);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
@@ -46,5 +51,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env.PORT ?? 3333);
   const db = await createDb();
   await startHttp(db, port);
-  console.error(`tenantdesk MCP server on http://localhost:${port}/mcp`);
+  console.error(`tenantdesk on http://localhost:${port}  (MCP at /mcp)`);
 }
